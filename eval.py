@@ -147,7 +147,8 @@ def get_LesionWiseScores(prediction_seg, gt_seg, label_value, dil_factor):
     ## Get the prediction and GT matrix based on 
     ## WT, TC, ET
 
-    pred_mat, gt_mat = get_TissueWiseSeg(
+    if label_value is not None:
+        pred_mat, gt_mat = get_TissueWiseSeg(
                                 prediction_matrix = pred_mat,
                                 gt_matrix = gt_mat,
                                 tissue_type = label_value
@@ -406,3 +407,88 @@ def get_LesionWiseResults(pred_file, gt_file, challenge_name, output=None):
         results_df.to_csv(output, index=False)
     
     return results_df
+
+def BraTS_2024_MEN_RT_LesionWiseResults(pred_file, gt_file, output=None):
+    """
+    Computes the Lesion-wise scores for pair of prediction and ground truth
+    segmentations
+
+    Parameters
+    ==========
+    pred_file: str; location of the prediction segmentation    
+    gt_file: str; location of the gt segmentation
+    challenge_name: str; name of the challenge for parameters
+
+
+    Output
+    ======
+    Saves the performance metrics as CSVs
+    results_df: pd.DataFrame; lesion-wise results with other metrics
+    """
+    
+    ## Dilation and Threshold Parameters
+    dilation_factor = 1
+    lesion_volume_thresh = 50       
+        
+
+    final_lesionwise_metrics_df = pd.DataFrame()
+
+    tp, fn, fp, gt_tp, metric_pairs, full_dice, full_hd95, full_gt_vol, full_pred_vol, full_sens, full_specs = get_LesionWiseScores(
+                                                        prediction_seg = pred_file,
+                                                        gt_seg = gt_file,
+                                                        label_value = None,
+                                                        dil_factor = dilation_factor
+                                                    )
+    
+    metric_df = pd.DataFrame(
+        metric_pairs, columns=['predicted_lesion_numbers', 'gt_lesion_numbers', 
+                               'gt_lesion_vol', 'dice_lesionwise', 'hd95_lesionwise']
+            ).sort_values(by = ['gt_lesion_numbers'], ascending=True).reset_index(drop = True)
+    
+    metric_df['_len'] = metric_df['predicted_lesion_numbers'].map(len)
+
+    ## Removing <= 50 lesions from analysis
+    fn_sub = (metric_df[(metric_df['_len'] == 0) &
+              (metric_df['gt_lesion_vol'] <= lesion_volume_thresh)
+              ]).shape[0]
+    
+    
+    gt_tp_sub = (metric_df[(metric_df['_len'] != 0) & 
+        (metric_df['gt_lesion_vol'] <= lesion_volume_thresh)
+        ]).shape[0]
+    
+    metric_df = metric_df.replace(np.inf, 374)
+
+    final_lesionwise_metrics_df = final_lesionwise_metrics_df.append(metric_df)
+    metric_df_thresh = metric_df[metric_df['gt_lesion_vol'] > lesion_volume_thresh]
+    
+    try:
+        lesion_wise_dice = np.sum(metric_df_thresh['dice_lesionwise'])/(len(metric_df_thresh) + len(fp))
+    except:
+        lesion_wise_dice = np.nan
+        
+    try:
+        lesion_wise_hd95 = (np.sum(metric_df_thresh['hd95_lesionwise']) + len(fp)*374)/(len(metric_df_thresh) + len(fp))
+    except:
+        lesion_wise_hd95 = np.nan
+
+    if math.isnan(lesion_wise_dice):
+        lesion_wise_dice = 1
+
+    if math.isnan(lesion_wise_hd95):
+        lesion_wise_hd95 = 0
+    
+    metrics_dict = {
+        'Num_TP' : len(gt_tp) - gt_tp_sub,
+        'Num_FP' : len(fp),
+        'Num_FN' : len(fn) - fn_sub,
+        'Sensitivity': full_sens,
+        'Specificity': full_specs,
+        'Legacy_Dice' : full_dice,
+        'Legacy_HD95' : full_hd95,
+        'GT_Complete_Volume' : full_gt_vol,
+        'LesionWise_Score_Dice' : lesion_wise_dice,
+        'LesionWise_Score_HD95' : lesion_wise_hd95
+    }
+
+    return metrics_dict
